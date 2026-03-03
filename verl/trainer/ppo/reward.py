@@ -176,6 +176,13 @@ def compute_reward(data: DataProto, reward_fn: AbstractRewardManager) -> tuple[t
     Returns:
         Tuple of reward tensor and extra info dictionary.
     """
+    # Update training step and total steps if available in metadata
+    if hasattr(data, 'meta_info'):
+        if 'training_step' in data.meta_info and hasattr(reward_fn, 'set_training_step'):
+            reward_fn.set_training_step(data.meta_info['training_step'])
+        if 'total_training_steps' in data.meta_info and hasattr(reward_fn, 'set_total_training_steps'):
+            reward_fn.set_total_training_steps(data.meta_info['total_training_steps'])
+
     try:
         reward_result = reward_fn(data, return_dict=True)
         reward_tensor = reward_result["reward_tensor"]

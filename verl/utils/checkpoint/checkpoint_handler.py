@@ -91,7 +91,7 @@ class CheckpointHandler:
 
             # Use StatefulDataLoader's built-in state dict functionality
             dataloader_state_dict = self.train_dataloader.state_dict()
-            torch.save(dataloader_state_dict, dataloader_local_path)
+            torch.save(dataloader_state_dict, dataloader_local_path, _use_new_zipfile_serialization=False)
             print(f"Saved dataloader state to: {dataloader_local_path}")
 
         if self.rank == 0:

@@ -18,12 +18,40 @@ from .dapo import DAPORewardManager
 from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
 
+# Import custom reward managers
+try:
+    from .adaptive_reasoning import AdaptiveReasoningV6RewardManager
+    AdaptiveReasoningRewardManager = AdaptiveReasoningV6RewardManager  # Alias for latest version
+except ImportError:
+    AdaptiveReasoningV6RewardManager = None
+    AdaptiveReasoningRewardManager = None
+
+try:
+    from .adaptive_reasoning_v5 import AdaptiveReasoningV5RewardManager
+except ImportError:
+    AdaptiveReasoningV5RewardManager = None
+
+try:
+    from .adaptive_reward_v1 import AdaptiveRewardV1Manager
+except ImportError:
+    AdaptiveRewardV1Manager = None
+
+try:
+    from .adaptive_reward_v2 import AdaptiveRewardV2Manager
+except ImportError:
+    AdaptiveRewardV2Manager = None
+
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
     "BatchRewardManager",
     "DAPORewardManager",
     "NaiveRewardManager",
     "PrimeRewardManager",
+    "AdaptiveReasoningRewardManager",
+    "AdaptiveReasoningV5RewardManager",
+    "AdaptiveReasoningV6RewardManager",
+    "AdaptiveRewardV1Manager",
+    "AdaptiveRewardV2Manager",
     "register",
     "get_reward_manager_cls",
 ]

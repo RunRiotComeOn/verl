@@ -613,8 +613,17 @@ class RayPPOTrainer:
 
             reward_extra_infos_dict["reward"].extend(scores)
             if "reward_extra_info" in result:
-                for key, lst in result["reward_extra_info"].items():
-                    reward_extra_infos_dict[key].extend(lst)
+                for key, value in result["reward_extra_info"].items():
+                    # Check if this is a batch metric (scalar) or per-sample info (list)
+                    if isinstance(value, (int, float, np.number)):
+                        # Batch-level metric: store as single value, don't extend
+                        # We'll handle aggregation later
+                        if key not in reward_extra_infos_dict:
+                            reward_extra_infos_dict[key] = []
+                        reward_extra_infos_dict[key].append(value)
+                    else:
+                        # Per-sample info: extend as before
+                        reward_extra_infos_dict[key].extend(value)
 
             # collect num_turns of each prompt
             if "__num_turns__" in test_batch.non_tensor_batch:
@@ -624,7 +633,22 @@ class RayPPOTrainer:
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
-        # dump generations
+        # Separate batch metrics from per-sample metrics for validation
+        batch_metrics_dict = {}
+        per_sample_dict = {}
+
+        for key_info, lst in reward_extra_infos_dict.items():
+            # Batch metrics have much fewer values (one per batch, not per sample)
+            # Per-sample metrics should match the number of samples
+            if len(lst) > 0 and len(lst) != len(sample_scores):
+                # This is a batch metric - average it
+                batch_metrics_dict[f"val/{key_info}"] = float(np.mean(lst))
+            else:
+                # This is per-sample info
+                per_sample_dict[key_info] = lst
+                assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
+
+        # Dump generations using per-sample metrics only
         val_data_dir = self.config.trainer.get("validation_data_dir", None)
         if val_data_dir:
             self._dump_generations(
@@ -632,16 +656,14 @@ class RayPPOTrainer:
                 outputs=sample_outputs,
                 gts=sample_gts,
                 scores=sample_scores,
-                reward_extra_infos_dict=reward_extra_infos_dict,
+                reward_extra_infos_dict=per_sample_dict,
                 dump_path=val_data_dir,
             )
 
-        for key_info, lst in reward_extra_infos_dict.items():
-            assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
-
         data_sources = np.concatenate(data_source_lst, axis=0)
 
-        data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
+        # Use per_sample_dict for validation metrics processing
+        data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, per_sample_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
             core_var = "acc" if "acc" in var2metric2val else "reward"
@@ -664,6 +686,9 @@ class RayPPOTrainer:
             metric_dict["val-aux/num_turns/min"] = sample_turns.min()
             metric_dict["val-aux/num_turns/max"] = sample_turns.max()
             metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
+
+        # Add batch-level metrics from reward function
+        metric_dict.update(batch_metrics_dict)
 
         return metric_dict
 
@@ -1061,6 +1086,9 @@ class RayPPOTrainer:
                             if self.use_rm and "rm_scores" not in batch.batch.keys():
                                 rm_scores = self.rm_wg.compute_rm_score(batch)
                                 batch = batch.union(rm_scores)
+                            # Add training step and total steps for reward function
+                            batch.meta_info["training_step"] = self.global_steps
+                            batch.meta_info["total_training_steps"] = self.total_training_steps
                             reward_baseline_tensor, _ = compute_reward(batch, self.reward_fn)
                             reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
 
@@ -1087,6 +1115,9 @@ class RayPPOTrainer:
 
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+                    # Add training step and total steps for reward function (e.g., for ratio control in V7)
+                    batch.meta_info["training_step"] = self.global_steps
+                    batch.meta_info["total_training_steps"] = self.total_training_steps
 
                     with marked_timer("reward", timing_raw, color="yellow"):
                         # compute reward model score
@@ -1157,7 +1188,27 @@ class RayPPOTrainer:
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                            # Separate batch-level metrics from per-sample extra info
+                            # Batch metrics are scalars (float/int), per-sample info are lists
+                            batch_metrics = {}
+                            per_sample_info = {}
+
+                            for k, v in reward_extra_infos_dict.items():
+                                # Check if this is a batch metric (scalar) or per-sample info (list/array)
+                                if isinstance(v, (int, float, np.number)):
+                                    # This is a batch-level metric, add to metrics dict
+                                    batch_metrics[k] = float(v)
+                                else:
+                                    # This is per-sample info, add to batch
+                                    per_sample_info[k] = np.array(v)
+
+                            # Update batch with per-sample info
+                            if per_sample_info:
+                                batch.non_tensor_batch.update(per_sample_info)
+
+                            # Update metrics with batch-level metrics
+                            if batch_metrics:
+                                metrics.update(batch_metrics)
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
