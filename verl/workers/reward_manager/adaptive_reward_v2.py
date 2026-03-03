@@ -49,7 +49,7 @@ class AdaptiveRewardV2Manager(AbstractRewardManager):
         min_scalar: float = 0.3,
         normalize_answers: bool = True,
         # Diversity parameters
-        initial_diversity_weight: float = 0.3,
+        initial_diversity_weight: float = 0.5,
         diversity_decay_strategy: str = "cosine",
         total_training_steps: int = 1000,
         diversity_exp_decay_rate: float = 0.95,
